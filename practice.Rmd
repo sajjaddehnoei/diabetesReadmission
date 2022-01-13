@@ -1,0 +1,371 @@
+---
+title: "Practice"
+author: "Sajjad"
+date: "12/13/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadPackages}
+library(tidyverse)
+library(caTools)
+library(lubridate)
+#to create correlation matrix
+library(GGally)
+library(caret) 
+library(pROC)
+library(vtree)
+library(ggpubr)
+```
+
+
+```{r loadData}
+z <- read.csv("Data/train.csv")
+
+#creating a record ID column to control sampling and splitting.
+recordID <- seq(1,25000, by=1)
+x <- z %>%
+  cbind(recordID) %>%
+  relocate(recordID, .before=time_in_hospital)
+#UPDATE: while it's a good way to create record IDs, dyplyr() has a more convenient option:
+x <- x %>%
+  mutate(recordID=row_number())
+```
+
+```{r missingValues}
+#check for missing values
+nMiss <- function(x) { sum(is.na(x))}
+
+m <- as.data.frame(t(train %>% summarise_all(nMiss)))  %>%
+  rename(nMiss=V1)
+
+#No missing.
+```
+
+
+```{r splitSample}
+set.seed(1995)
+#validation set
+validation <- x %>% 
+  sample_frac(0.2)
+#training set
+train <- x %>% 
+  anti_join(validation, by="recordID") %>%
+  sample_frac(0.75)
+#test set
+test <- x %>%
+  anti_join(validation, by="recordID") %>%
+  anti_join(train, by="recordID")
+```
+
+
+```{r payerCodeExplanations}
+glimpse(train)
+#information on payer_code:
+# payer_code_MC -> Medicaid
+# payer_code_HM -> Health Maintenance Organization
+# payer_code_SP -> ?
+# payer_code_BC -> ?
+```
+
+
+```{r recodingCharacterstoFactors}
+factorize <- function(x) {
+  factor(if_else(x=="True", T, F), levels=c(T, F))
+}
+
+#train
+train <- train %>%
+  mutate_if(is.character, factorize)
+#test
+test <- test %>%
+  mutate_if(is.character, factorize)
+#validation
+validation <- validation %>%
+  mutate_if(is.character, factorize)
+```
+
+```{r factorGraphs, eval=F}
+#demographics
+train %>%
+  pivot_longer(race_Caucasian:age_.40.50., 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#payerCodes
+train %>%
+  pivot_longer(payer_code_.:payer_code_BC, 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#medicalSpecialty
+train %>%
+  pivot_longer(medical_specialty_.:medical_specialty_Cardiology, 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#dignosisCodes
+train %>%
+  pivot_longer(diag_1_428:diag_3_428, 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#fluids
+train %>%
+  pivot_longer(max_glu_serum_None:A1Cresult_None, 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#medications
+train %>%
+  pivot_longer(metformin_No:metformin.pioglitazone_No, 
+               names_to="factor", values_to="value") %>%
+  ggplot(aes(x=value, y=readmitted)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~factor)
+
+#change
+train %>%
+  ggplot(aes(x=change_No, y=readmitted)) +
+  geom_bar(stat = "identity")
+
+#diabetesMed
+train %>%
+  ggplot(aes(x=diabetesMed_Yes, y=readmitted)) +
+  geom_bar(stat = "identity")
+```
+
+
+```{r correlationMatrix, eval=F}
+train %>%
+  select(time_in_hospital:number_diagnoses) %>%
+  ggpairs()
+
+```
+
+```{r checkOutliers}
+par(mfrow = c(2,4))
+boxplot(train$time_in_hospital, main = "time_in_hospital")
+boxplot(train$num_lab_procedures, main = "num_lab_procedures")
+boxplot(train$num_procedures, main = "num_procedures")
+boxplot(train$num_medications, main = "num_medications")
+boxplot(train$number_outpatient, main = "number_outpatient")
+boxplot(train$number_emergency, main = "number_emergency")
+boxplot(train$number_inpatient, main = "number_inpatient")
+boxplot(train$number_diagnoses, main = "number_diagnoses")
+```
+
+```{r removeOutliers}
+train <- train %>%
+    filter(time_in_hospital < median(time_in_hospital)+1.5*IQR(time_in_hospital)&
+           time_in_hospital > median(time_in_hospital)-1.5*IQR(time_in_hospital)) %>%
+  
+    filter(num_lab_procedures < median(num_lab_procedures)+1.5*IQR(num_lab_procedures)&
+           num_lab_procedures > median(num_lab_procedures)-1.5*IQR(num_lab_procedures)) %>%
+  
+    filter(num_procedures < median(num_procedures)+1.5*IQR(num_procedures)&
+         num_procedures > median(num_procedures)-1.5*IQR(num_procedures)) %>%
+  
+    filter(num_medications < median(num_medications)+1.5*IQR(num_medications)&
+         num_medications > median(num_medications)-1.5*IQR(num_medications)) %>%
+  
+    filter(number_outpatient < 15) %>%
+  
+    filter(number_emergency < 15) %>%
+  
+    filter(number_inpatient < 15) %>%
+  
+    filter(number_diagnoses < median(number_diagnoses)+1.5*IQR(number_diagnoses)&
+         number_diagnoses > median(number_diagnoses)-1.5*IQR(number_diagnoses))
+
+```
+
+#Logistic Regression:
+
+```{r logisticRegression Model Development}
+#removing variables with observations in 1 level of y.
+lrDB <- 
+  train%>% select(-acarbose_No, -acetohexamide_No,
+                  -chlorpropamide_No, -citoglipton_No,
+                  -examide_No, -glimepiride.pioglitazone_No, 
+                  -glipizide.metformin_No, -glyburide.metformin_No,
+                 -metformin.pioglitazone_No,
+                 -metformin.rosiglitazone_No,
+                 -miglitol_No, -nateglinide_No, -repaglinide_No,
+                 -tolazamide_No, -tolbutamide_No, -troglitazone_No)
+lrModel <- glm(readmitted~., family = "binomial", data=lrDB)
+
+summary(lrModel)
+```
+
+```{r logisticRegression Model Tuning}
+#removing variables with observations in 1 level of y and those that don't contribute to model's R^2 and AIC.
+lrModel <- glm(readmitted~. -recordID -num_lab_procedures -num_medications -payer_code_HM -medical_specialty_InternalMedicine -medical_specialty_Cardiology -max_glu_serum_None -A1Cresult_None -glipizide_No -pioglitazone_No -rosiglitazone_No -diag_1_414 -age_.80.90. -age_.40.50. -age_.50.60. -diag_1_786 -diag_2_428 -diag_2_276 -diag_3_276 -diag_3_428, 
+               family = "binomial", data=lrDB)
+
+summary(lrModel)
+```
+
+```{r logisticRegression Prediction}
+lrPrediction <- 
+  predict(lrModel, test, type="response")
+
+#cleaning the prediction database
+lrPrediction <- as.data.frame(lrPrediction) %>%
+  rename(predictedProb = lrPrediction) %>%
+  mutate(predictedValue=if_else(predictedProb > 0.500, 1, 0))
+```
+
+```{r logisticRegression Evaluation}
+xtab <- table(actualValue=test$readmitted, 
+      predictedValue=lrPrediction$predictedValue)
+confusionMatrix(xtab, positive = "1")
+```
+
+```{r logisticRegression ROC}
+par(pty="s")
+lrROC <- test %>%
+  cbind(lrPrediction) %>%
+  select(recordID, predictedProb, readmitted) %>%
+  roc(readmitted, predictedProb)
+  
+ggroc(lrROC)+
+  ggtitle(paste0('ROC Curve ', '(AUC = ', round(lrROC$auc,4), ')'))+
+   theme_minimal()
+```
+
+
+
+#K-Nearest Neighbours
+```{r knn Model Development}
+binorize <- function(x) {
+  if_else(x==T, 1, 0)
+}
+#changing factors to binary. This is to be able to use them in the model.
+knnTrain <- train %>%
+  mutate_if(is.factor, binorize)
+
+#removing recordID and readmitted to normalize the rest
+recordID <- knnTrain %>% select(recordID)
+readmitted <- knnTrain %>% select(readmitted)
+
+#seperating categorical variables
+knnTrainCat <- knnTrain %>%
+  select_if(is.double)
+
+#seperating cintinuous variables
+knnTrainCont <- knnTrain %>%
+  select(time_in_hospital:number_diagnoses)
+
+#pre-processing continuous variables
+preProcess(knnTrainCont, method = c("center", "scale"))
+
+#binding the cat. and cont.variables back after normalizing
+knnTrain <- knnTrainCat %>%
+  cbind(knnTrainCont) %>%
+  cbind(readmitted) %>%
+  mutate(readmitted=factor(readmitted, levels=c(1,0)))
+
+knnModel <- knn3(formula=readmitted ~ ., data=knnTrain, k=122)
+
+```
+
+```{r knn Model Tuning}
+#prepating test dataset for knn
+#changing factors to binary. This is to be able to use them in the model.
+knnTest <- test %>%
+  mutate_if(is.factor, binorize)
+
+#removing recordID and readmitted to normalize the rest
+recordID <- knnTest %>% select(recordID)
+readmitted <- knnTest %>% select(readmitted)
+
+#seperating categorical variables
+knnTestCat <- knnTest %>%
+  select_if(is.double)
+
+#seperating cintinuous variables
+knnTestCont <- knnTest %>%
+  select(time_in_hospital:number_diagnoses)
+
+preProcess(knnTestCont, method = c("center", "scale"))
+
+#binding the cat. and cont.variables back after normalizing
+knnDBTest <- knnTestCat %>%
+  cbind(knnTestCont) %>%
+  cbind(readmitted) %>%
+  mutate(readmitted=factor(readmitted, levels=c(1,0)))
+
+```
+
+```{r knn Prediction}
+knnPrediction <- predict(knnModel, knnTest, type =c("prob")) 
+knnPrediction <- data.frame(predictedProb=knnPrediction[,1])
+knnPrediction <- knnPrediction %>%
+  mutate(predictedValue=if_else(predictedProb > .5, 1, 0),
+         predictedValue=factor(predictedValue, levels=c("1", "0")))
+```
+
+```{r knn Evaluation}
+test <- test %>%
+  mutate(readmitted = factor(readmitted, levels=c("1", "0")))
+
+xtab <- table(actualValue=test$readmitted, 
+      predictedValue=knnPrediction$predictedValue)
+confusionMatrix(xtab, positive = "1")
+```
+
+```{r knn ROC}
+par(pty="s")
+knROC <- test %>%
+  cbind(knnPrediction) %>%
+  select(recordID, predictedProb, readmitted) %>%
+  roc(readmitted, predictedProb)
+  
+ggroc(knROC)+
+  ggtitle(paste0('ROC Curve ', '(AUC = ', round(knROC$auc,4), ')'))+
+   theme_minimal()
+```
+
+#Support Vector Machine
+```{r svn Model Development}
+trainControl <-
+ trainControl(method = "repeatedcv", number = 5, repeats = 3)
+
+svmModel <- train(readmitted ~., data = knnTrain, method = "svmRadial",
+                  trControl=trainControl)
+```
+
+```{r svm Prediction}
+svmPrediction <- predict(svmModel, knnTest, classProbs = TRUE) 
+svmPrediction <- data.frame(predictedValue=svmPrediction)
+```
+
+```{r svm Evaluation}
+test <- test %>%
+  mutate(readmitted = factor(readmitted, levels=c("1", "0")))
+
+xtab <- table(actualValue=test$readmitted, 
+      predictedValue=svmPrediction$predictedValue)
+confusionMatrix(xtab, positive = "1")
+```
+
+
+#Random Forest
+
+
+
+
