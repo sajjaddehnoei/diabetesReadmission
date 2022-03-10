@@ -28,7 +28,7 @@ registerDoParallel(cl)
 ```
 
 ```{r loadData}
-z <- read.csv("Data/train.csv")
+z <- read.csv("train.csv")
 
 #creating a record ID column to control sampling and splitting.
 recordID <- seq(1,25000, by=1)
