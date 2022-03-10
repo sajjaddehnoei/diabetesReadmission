@@ -19,8 +19,13 @@ library(caret)
 library(pROC)
 library(vtree)
 library(ggpubr)
+library(doParallel)
 ```
 
+```{r parallelCores}
+cl <- makePSOCKcluster(64)
+registerDoParallel(cl)
+```
 
 ```{r loadData}
 z <- read.csv("Data/train.csv")
@@ -340,13 +345,41 @@ ggroc(knROC)+
    theme_minimal()
 ```
 
-#Support Vector Machine
+#Support Vector Machines
+
 ```{r svn Model Development}
 trainControl <-
  trainControl(method = "repeatedcv", number = 5, repeats = 3)
 
+library(doParallel)
+r <- vector("numeric", length = 128)
+for (i in 1:128) {
+
+  cl <- makePSOCKcluster(i)
+  registerDoParallel(cl)
+
+start = Sys.time()
 svmModel <- train(readmitted ~., data = knnTrain, method = "svmRadial",
-                  trControl=trainControl)
+                  trControl=trainControl, allowParallel= TRUE)
+end = Sys.time()
+
+  r[i] <- as.numeric(difftime(end, start, units = "secs"))
+
+}
+```
+
+```{r}
+runTime <- data.frame(cores=seq(1, 128, 1), time=r)
+
+runTime %>%
+  filter(cores <= 64) %>%
+  ggplot(aes(x=cores, y=time))+
+  scale_x_continuous(breaks = seq(0, 64, by=2))+
+  ylab("Run time") + xlab("Number of cores in use")+
+  geom_text(aes(x=cores, y=time, label = round(time, 1)), vjust=-1.05,
+            hjust = .5, check_overlap = TRUE)+
+  geom_line()+
+  geom_point()
 ```
 
 ```{r svm Prediction}
@@ -365,7 +398,3 @@ confusionMatrix(xtab, positive = "1")
 
 
 #Random Forest
-
-
-
-
