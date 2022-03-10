@@ -14,17 +14,20 @@ Database: https://www.kaggle.com/brandao/diabetes
   <li>Neural Network</li>
   <li>Random Forest</li>
 </ul>
+
 ## Data Analysis 
 <ul>
   <li>Missing Value Treatment</li>
   <li>Random Sampling</li>
   <li>Correlation Analysis</li>
   <li>Outlier Detection</li>
-</ul>  
+</ul>
+
 ## Parallel Processing
 <ul>
   <li>doParallel</li>
 </ul>
+
 ## Train Set Control Measure
 <ul>
   <li>K-fold Cross Validation</li>
